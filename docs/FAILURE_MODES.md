@@ -72,31 +72,36 @@ testing: swapping in check-then-insert makes 6 tests fail.
 | `test_idempotency.py::test_key_reused_with_different_payload_is_refused` | 409 on payload mismatch |
 | `test_idempotency.py::test_same_key_different_payload_concurrently` | Two different payloads racing on one key: one wins, the other gets 409 |
 
-## 2. Concurrent transfers from the same account (race conditions)
+## 2. Concurrent transfers touching the same account (race conditions)
 
 **The problem.** Check-then-act: two withdrawals both read `balance = 100`,
 both decide `100 ≥ 100`, both debit, and the account ends at −100. This is a
 *lost update*.
 
-**Mechanism.** Before reading the balance, the transaction takes a row lock on
-the source account:
+**Mechanism.** Before reading the balance, the transaction takes row locks on
+both customer accounts, lowest id first, then reads the source's current
+balance (the newest entry's `balance_after`):
 
 ```sql
-SELECT 1 FROM accounts WHERE id = $source FOR NO KEY UPDATE;
-SELECT SUM(amount) FROM entries WHERE account_id = $source;  -- after the lock
+SELECT 1 FROM accounts WHERE id = $lower_id  FOR NO KEY UPDATE;
+SELECT 1 FROM accounts WHERE id = $higher_id FOR NO KEY UPDATE;
+SELECT balance_after FROM entries ... newest entry of $source ...;  -- after the locks
 ```
 
-A second transfer from the same account blocks at the lock until the first
-commits. Three details matter, and each is backed by a test:
+A second transfer touching either account blocks at the lock until the first
+commits. Four details matter, and each is backed by a test:
 
 1. **Isolation level: READ COMMITTED, on purpose.** In READ COMMITTED every
    statement sees everything committed before *that statement* started, so
-   the `SUM` that runs after we waited for the lock sees the previous holder's
-   entries. Under REPEATABLE READ the snapshot is frozen at the transaction's
-   *first* statement, before the wait, so the `SUM` misses them and the
-   account **still overdraws even with the lock**.
+   the balance read that runs after we waited for the lock sees the previous
+   holder's entries. Under REPEATABLE READ the snapshot is frozen at the
+   transaction's *first* statement, before the wait, so the read is stale and
+   the account **still overdraws even with the lock**. The `balance_after`
+   trigger therefore refuses to run under any level except READ COMMITTED
+   (`test_ledger_writes_refused_outside_read_committed`).
    `test_isolation_levels.py` demonstrates all four combinations directly
-   against Postgres:
+   against Postgres, with the ledger's triggers switched off so only the
+   strategy under test is measured:
 
    | Strategy | Result (20 × 100 withdrawn from 1,000) |
    |---|---|
@@ -113,18 +118,28 @@ commits. Three details matter, and each is backed by a test:
    Mutation test: switching to `FOR UPDATE` fails 5 concurrency tests with
    `deadlock detected`.
 
-3. **Only the source account is locked.** The only rule at risk is "a
-   customer balance never goes negative", and only a debit can break it.
-   Credits are plain appends. Because each transaction holds at most one
-   account lock, a deadlock cycle between transfers is impossible (a cycle
-   needs someone holding one lock while waiting for another).
+3. **Both accounts are locked, in sorted order.** Each entry stores the
+   account's running balance, and a running balance is only right if that
+   account's writers take turns, so the destination needs a lock too.
+   (Version 1 locked only the source and computed balances with `SUM`. That
+   ruled out deadlocks but slowed down as history grew; see
+   [PERFORMANCE.md](PERFORMANCE.md).) Two locks per transfer bring back the
+   classic deadlock: A→B holds A and wants B while B→A holds B and wants A.
+   Always locking the lower account id first makes that cycle impossible.
+   Mutation tests: locking in request order, or locking only the source
+   (the trigger then locks the destination late, which is unsorted again),
+   each fail 3 concurrency tests with deadlocks.
+
+4. **External accounts are never locked.** Funding accounts may go negative,
+   so they have nothing to protect, and every deposit touches one. Locking it
+   would queue all deposits of a currency on one row.
 
 | Test | What it proves |
 |---|---|
 | `test_concurrency.py::test_hot_account_never_overdraws[normal / widened_race_window]` | 200 simultaneous withdrawals of 100 from 10,000: exactly 100 succeed, 100 are rejected, final balance 0. The `widened_race_window` variant sleeps 20 ms *between the balance read and the debit*, so a broken lock would fail every run. |
 | `test_concurrency.py::test_random_traffic_final_balances_match_acknowledged_transfers` | 500 random concurrent transfers among 8 accounts: every final balance equals what the **client-visible responses** imply, so no lost updates and no false 201s or 422s |
 | `test_concurrency.py::test_opposing_transfers_do_not_deadlock` | 300 simultaneous A→B / B→A transfers, zero failures |
-| `test_concurrency.py::test_concurrent_deposits_into_one_account` | 200 unlocked credits to one account all land |
+| `test_concurrency.py::test_concurrent_deposits_into_one_account` | 200 concurrent credits to one account all land, each with the right running balance |
 | `test_isolation_levels.py` (4 tests) | The control experiment above. The two *failing* strategies prove the harness really produces the race. |
 
 ## 3. Crash between the debit and the credit
@@ -184,9 +199,15 @@ result.
 
 **Mechanism.** The invariants live in the database, not just in Python:
 
-- **There is no balance column.** A balance is `SUM(entries.amount)`, so it
-  can't drift from the history. `test_no_balance_column_exists` checks the
-  schema mechanically.
+- **No balance is ever edited.** The only balance-like column is
+  `entries.balance_after`, the running balance *after* that entry. Postgres
+  computes it in a trigger (any value the writer supplies is overwritten) and
+  never updates it afterwards, because entries are append-only.
+  `test_no_mutable_balance_exists` and `test_client_cannot_forge_balance_after`
+  check this.
+- **The database refuses overdrafts itself.** The same trigger raises if a
+  customer's running balance would go below zero, so the app's funds check
+  isn't the only guard (`test_database_refuses_overdraft_even_bypassing_the_app`).
 - **Entries are append-only.** A trigger rejects `UPDATE` and `DELETE`
   (`test_entries_are_append_only`). A correction is a new, reversing
   transfer.
@@ -197,8 +218,34 @@ result.
 and checks that the whole ledger sums to zero, that each completed transfer
 has exactly one `-amount` debit on its source and one `+amount` credit on
 its destination, that rejected transfers have no entries, that no `pending`
-row was ever committed, and that no customer balance is negative. A test
-about something else still fails if it corrupted the ledger.
+row was ever committed, that no customer balance is negative, and that
+**every stored `balance_after` equals the running sum of that account's
+history**. A test about something else still fails if it corrupted the
+ledger.
+
+### Two bugs the tests found in the running-balance trigger
+
+Both were found by mutation testing: removing the service's own locks so the
+trigger had to stand alone.
+
+1. **Queued writers lost money.** Postgres fills in an entry's `id` *before*
+   BEFORE-INSERT triggers run, which means before the trigger waits for the
+   account lock. A writer that queued behind another kept a *lower* id than
+   the entry it built on, so "newest entry = highest id" skipped it and the
+   balance silently dropped a credit. The service itself wasn't affected
+   (it locks before inserting anything), but hand-written SQL was. Fix: the
+   trigger draws a fresh id after it holds the lock.
+   `test_running_balance_survives_writers_queued_on_the_lock` reproduces the
+   interleaving deterministically: without the fix the balance is 7 instead
+   of 12.
+2. **External accounts were locked by accident.** The trigger locked the
+   account *before* checking its kind, so it locked funding accounts too. That
+   serialized all deposits and deadlocked two raw-SQL writers in the test
+   above. Fix: read the kind unlocked first, and lock only customer accounts.
+
+A third issue showed up in the load test rather than the suite: a query-plan
+choice that turned the O(1) balance lookup into a scan of 500k rows. It's
+described in [PERFORMANCE.md](PERFORMANCE.md).
 
 ---
 
@@ -210,16 +257,20 @@ race. Two safeguards:
 - **Control experiments** (`test_isolation_levels.py`) assert that the broken
   strategies *do* overdraw under this harness.
 - **Mutation testing.** Each deliberate bug below was injected into
-  `app/service.py`, and the suite was run against it:
+  `app/service.py`, and the suite was run against it. "v1" is the first
+  design (source-only lock, `SUM` balance); "v2" is the current one.
 
-| Injected bug | Caught by |
-|---|---|
-| Remove the source-account row lock | hot-account tests (both variants) plus the invariant check (overdrawn accounts) |
-| `FOR UPDATE` instead of `FOR NO KEY UPDATE` | 5 concurrency tests (deadlocks → 500s) |
-| Check-then-insert instead of `INSERT … ON CONFLICT` | 5 idempotency tests + 1 crash-retry test |
-| Commit the debit in its own transaction | Postgres itself (FK violation); with DB checks disabled too, the crash test and invariant check |
+| Injected bug | Version | Caught by |
+|---|---|---|
+| Remove the source-account row lock | v1 | hot-account tests (both variants) plus the invariant check (overdrawn accounts) |
+| `FOR UPDATE` instead of `FOR NO KEY UPDATE` | v1 | 5 concurrency tests (deadlocks → 500s) |
+| Check-then-insert instead of `INSERT … ON CONFLICT` | v1 | 5 idempotency tests + 1 crash-retry test |
+| Commit the debit in its own transaction | v1 | Postgres itself (FK violation); with DB checks disabled too, the crash test and invariant check |
+| Lock both accounts in request order instead of sorted | v2 | 3 concurrency tests (deadlocks) |
+| Lock only the source account | v2 | 3 concurrency tests (deadlocks) |
+| Remove all service-side locks | v2 | 5 concurrency tests (500s from the database's overdraft guard). Before the trigger fix, the invariant check also reported a forked `balance_after` chain; after it, the ledger stays consistent. |
 
-The suite was also run 5 times back to back with no flakes.
+The suite was run 5 times back to back with no flakes, for each version.
 
 ## Known limitations
 
@@ -231,6 +282,12 @@ The suite was also run 5 times back to back with no flakes.
   against the key.** They happen before the key is claimed, so a retry
   re-validates. That's safe because nothing moved, but it means a retry after
   the account is created would succeed.
+- **Hand-written SQL can deadlock with the service.** The trigger locks
+  accounts in the order entries are inserted, not in sorted order. A raw-SQL
+  transfer can therefore deadlock with a service transfer. Postgres detects
+  that and aborts one of them: an error to retry, never a corrupted balance.
+- **Credits to one account are now serialized.** This is the price of the
+  running balance, measured in [PERFORMANCE.md](PERFORMANCE.md).
 - **Loss of the database itself** (disk failure, failover) is outside this
   project. Durability rests on Postgres's WAL with `synchronous_commit=on`,
   plus, in production, synchronous replication.

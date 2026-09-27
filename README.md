@@ -16,7 +16,7 @@ docker compose up --build        # API on :8000, OpenAPI docs on :8000/docs
 
 | | |
 |---|---|
-| **Correctness** | 36 tests centered on 5 failure scenarios, with an invariant check after every test and mutation testing of the suite ([docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)) |
+| **Correctness** | 40 tests centered on 5 failure scenarios, with an invariant check after every test and mutation testing of the suite ([docs/FAILURE_MODES.md](docs/FAILURE_MODES.md)) |
 | **Throughput** | ~440 transfers/s, p99 67 ms, on 4 vCPUs with one API process ([docs/PERFORMANCE.md](docs/PERFORMANCE.md)) |
 | **Bottleneck** | API CPU for spread-out traffic; the row lock on a hot account, confirmed causally |
 
@@ -24,23 +24,28 @@ docker compose up --build        # API on :8000, OpenAPI docs on :8000/docs
 
 ## 1. The double-entry model
 
-Nothing in the schema stores a balance. Money moves only by **appending
+No balance is ever edited in place. Money moves only by **appending
 entries**, and every transfer appends exactly two, which sum to zero:
 
 ```
 transfer 300 cents, Alice → Bob
 
 entries
- id | transfer_id | account | amount
-----+-------------+---------+--------
- 17 | t_8c1…      | alice   |   -300   ← debit  (money leaves)
- 18 | t_8c1…      | bob     |   +300   ← credit (money arrives)
+ id | transfer_id | account | amount | balance_after
+----+-------------+---------+--------+---------------
+ 17 | t_8c1…      | alice   |   -300 |           700   ← debit  (money leaves)
+ 18 | t_8c1…      | bob     |   +300 |           300   ← credit (money arrives)
 ```
 
-An account's balance is `SUM(amount)` over its entries. Why build it this way:
+`balance_after` is the account's running balance *after* that entry. It is
+computed by Postgres, written once, and never changed. An account's current
+balance is its newest entry's `balance_after`: one index lookup, however long
+the history. Why build it this way:
 
-- **Nothing can drift.** A stored balance field can disagree with the history
-  that supposedly produced it. A derived balance can't.
+- **Nothing can drift.** A balance field that gets updated can disagree with
+  the history that supposedly produced it. Here every balance is part of the
+  history, and the test suite checks after every test that each
+  `balance_after` equals the running sum of the amounts.
 - **Audit trail for free.** Every cent's origin is a row you can point to.
   Corrections are new reversing entries; existing entries are never edited.
 - **Money is conserved by construction.** The sum of *all* entries in the
@@ -58,6 +63,9 @@ These rules are enforced by **Postgres itself**, not just the Python code
   entries sum to zero, so a one-legged transfer can't commit even if the
   application has a bug;
 - a trigger rejects `UPDATE` and `DELETE` on `entries` (append-only);
+- a trigger computes `balance_after` (overwriting whatever the writer sent)
+  and **refuses any entry that would make a customer balance negative**, a
+  second overdraft guard beneath the application's own check;
 - amounts are `BIGINT` cents, never floats (`0.1 + 0.2 ≠ 0.3`).
 
 ## 2. How a transfer executes
@@ -69,12 +77,14 @@ Everything below is **one database transaction**
 BEGIN                                            -- READ COMMITTED
   INSERT INTO transfers (idempotency_key, …)     ① claim the key
     ON CONFLICT (idempotency_key) DO NOTHING       (duplicate → replay stored result)
-  SELECT … FROM accounts WHERE id = $src
-    FOR NO KEY UPDATE                            ② lock the source account
-  SELECT SUM(amount) FROM entries                ③ read balance *after* locking
-    WHERE account_id = $src                        (insufficient → record 'rejected')
-  INSERT entry (-amount, src)                    ④ debit
-  INSERT entry (+amount, dst)                    ⑤ credit
+  SELECT … FROM accounts WHERE id = $lower
+    FOR NO KEY UPDATE                            ② lock both accounts,
+  SELECT … FROM accounts WHERE id = $higher        lowest id first
+    FOR NO KEY UPDATE
+  newest balance_after of $src                   ③ read balance *after* locking
+                                                   (insufficient → record 'rejected')
+  INSERT entry (-amount, src)                    ④ debit  } trigger computes
+  INSERT entry (+amount, dst)                    ⑤ credit } balance_after
   UPDATE transfers SET status = 'completed'
 COMMIT                                           -- trigger verifies Σ = 0
 ```
@@ -90,7 +100,7 @@ failure-modes doc):
   read the same balance, both pass the check, and both debit: a *lost
   update*. The lock makes the second one wait.
 - **Why READ COMMITTED and not a "stronger" level?** In READ COMMITTED each
-  statement sees everything committed before it started, so the `SUM` in ③
+  statement sees everything committed before it started, so the read in ③
   sees the entries of whoever held the lock before us. Under REPEATABLE READ,
   the snapshot is taken at the *first* statement, before we waited for
   the lock, so the balance is stale and the account **overdraws despite the
@@ -99,9 +109,15 @@ failure-modes doc):
   "key share" lock on the referenced account to enforce the foreign key. A
   plain `FOR UPDATE` conflicts with that and **deadlocks** two transfers from
   the same account. Mutation testing confirmed it.
-- **Why lock only the source?** Only a debit can push a balance negative, so
-  only the debit needs serializing. And with at most one lock per
-  transaction, transfers can't deadlock with each other.
+- **Why lock both accounts?** A running balance is only right if the
+  account's writers take turns, and that includes the one receiving money.
+  (Version 1 locked only the source and summed history instead; it got
+  slower as accounts aged. See section 5.)
+- **Why sorted order?** Two locks per transfer invite the classic deadlock:
+  A→B holds A and waits for B while B→A holds B and waits for A. If every
+  transfer takes the lower account id first, that cycle can't form. A test
+  fires 300 A↔B transfers at once, and a mutation test (locking in request
+  order) shows it catches the deadlock.
 
 ## 3. Idempotency design
 
@@ -129,7 +145,8 @@ Every test runs against a real `uvicorn` subprocess and real Postgres, fires
 genuinely concurrent requests (an asyncio start barrier releases them all at
 once), and ends with an **invariant check of the whole ledger**: sums to
 zero, every completed transfer has exactly one matching debit and credit, no
-`pending` rows, no negative customer balances.
+`pending` rows, no negative customer balances, and every `balance_after`
+equals the running sum of its account's history.
 
 | # | Scenario | Key assertion |
 |---|---|---|
@@ -137,7 +154,7 @@ zero, every completed transfer has exactly one matching debit and credit, no
 | 2 | **Concurrent transfers on one account** (200 withdrawals, with and without a deliberately widened 20 ms race window; 500 random transfers; 300 A↔B) | never overdrawn; final balances match exactly what the responses told clients; no deadlocks |
 | 3 | **SIGKILL between debit and credit** | nothing persisted; the retry processes once |
 | 4 | **SIGKILL after commit, before the response** | the retry replays; the account is debited once |
-| 5 | **Writes that bypass the app** | the database rejects unbalanced transfers and edits to entries |
+| 5 | **Writes that bypass the app** | the database rejects unbalanced transfers, edits to entries, forged running balances, and overdrafts |
 
 Crashes are injected with **failpoints** ([`app/failpoints.py`](app/failpoints.py)):
 `LEDGER_FAILPOINTS="after_debit=crash"` makes the server SIGKILL itself at
@@ -147,11 +164,12 @@ that exact line. That's deterministic, unlike a `kill -9` from outside.
 
 - *Control experiments* assert that broken strategies (no lock; lock under
   REPEATABLE READ) **do** overdraw in this harness.
-- *Mutation testing*: I injected four real bugs into the service (removed
-  the lock, `FOR UPDATE`, check-then-insert idempotency, a debit committed on
-  its own). The suite caught the first three; Postgres itself rejected the
-  fourth, and with the database checks also disabled the suite caught it too.
-  Details in
+- *Mutation testing*: I injected seven real bugs into the service, such as
+  removing locks, locking in the wrong order, `FOR UPDATE`, and
+  check-then-insert idempotency. Every one was caught, by the suite or by
+  Postgres itself. This also exposed two genuine bugs in my own
+  running-balance trigger, which are now fixed and have a deterministic
+  regression test. Details in
   [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md).
 
 ## 5. Load test results
