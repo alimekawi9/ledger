@@ -1,0 +1,218 @@
+[
+  {
+    "scenario": "uniform",
+    "concurrency": 64,
+    "duration_s": 10,
+    "requests": 3637,
+    "throughput_rps": 363.7,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 3637
+    },
+    "p50_ms": 174.3249740002284,
+    "p95_ms": 222.13360280011324,
+    "p99_ms": 427.4771320801828,
+    "max_ms": 1092.1528480002962,
+    "label": "baseline: 1 worker, pool 20",
+    "workers": 1,
+    "pool_max": 20,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 0,
+    "evidence": {
+      "avg_backends_by_state": {
+        "idle (connection unused)": 12.5,
+        "idle in txn (waiting on app)": 6.6,
+        "active: WAL write/flush": 0.37,
+        "active: on CPU": 0.26,
+        "active: client I/O": 0.19,
+        "active: waiting on row/txn lock": 0.08
+      },
+      "avg_pool_requests_waiting": 24.95,
+      "api_cpu_pct": 95.4,
+      "postgres_cpu_pct": 58.5,
+      "machine_busy_pct": 60.4,
+      "cores": 4
+    }
+  },
+  {
+    "scenario": "uniform",
+    "concurrency": 64,
+    "duration_s": 10,
+    "requests": 3723,
+    "throughput_rps": 372.3,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 3723
+    },
+    "p50_ms": 168.13050499968085,
+    "p95_ms": 206.50099120007326,
+    "p99_ms": 225.7445208999434,
+    "max_ms": 240.66765599991413,
+    "label": "pool 5",
+    "workers": 1,
+    "pool_max": 5,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 0,
+    "evidence": {
+      "avg_backends_by_state": {
+        "idle in txn (waiting on app)": 3.25,
+        "idle (connection unused)": 1.04,
+        "active: WAL write/flush": 0.38,
+        "active: on CPU": 0.28,
+        "active: client I/O": 0.04,
+        "active: IO:DataFileExtend": 0.01
+      },
+      "avg_pool_requests_waiting": 55.67,
+      "api_cpu_pct": 96.2,
+      "postgres_cpu_pct": 46.3,
+      "machine_busy_pct": 54.3,
+      "cores": 4
+    }
+  },
+  {
+    "scenario": "uniform",
+    "concurrency": 64,
+    "duration_s": 10,
+    "requests": 4127,
+    "throughput_rps": 412.7,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 4127
+    },
+    "p50_ms": 145.46582899993155,
+    "p95_ms": 208.30071550012687,
+    "p99_ms": 310.67430181992603,
+    "max_ms": 584.9533020000308,
+    "label": "pool 60",
+    "workers": 1,
+    "pool_max": 60,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 0,
+    "evidence": {
+      "avg_backends_by_state": {
+        "idle (connection unused)": 30.6,
+        "idle in txn (waiting on app)": 27.68,
+        "active: waiting on row/txn lock": 0.73,
+        "active: WAL write/flush": 0.57,
+        "active: on CPU": 0.21,
+        "active: client I/O": 0.21
+      },
+      "avg_pool_requests_waiting": 0.0,
+      "api_cpu_pct": 92.8,
+      "postgres_cpu_pct": 67.2,
+      "machine_busy_pct": 62.8,
+      "cores": 4
+    }
+  },
+  {
+    "scenario": "uniform",
+    "concurrency": 64,
+    "duration_s": 10,
+    "requests": 3484,
+    "throughput_rps": 348.4,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 3484
+    },
+    "p50_ms": 180.24812699991344,
+    "p95_ms": 218.40205134990347,
+    "p99_ms": 248.13767195999844,
+    "max_ms": 261.6647400000147,
+    "label": "synchronous_commit=off",
+    "workers": 1,
+    "pool_max": 20,
+    "pgoptions": "-c synchronous_commit=off",
+    "failpoints": "",
+    "history": 0,
+    "evidence": {
+      "avg_backends_by_state": {
+        "idle (connection unused)": 13.57,
+        "idle in txn (waiting on app)": 6.1,
+        "active: on CPU": 0.22,
+        "active: client I/O": 0.07,
+        "active: waiting on row/txn lock": 0.03
+      },
+      "avg_pool_requests_waiting": 26.29,
+      "api_cpu_pct": 93.0,
+      "postgres_cpu_pct": 51.3,
+      "machine_busy_pct": 54.6,
+      "cores": 4
+    }
+  },
+  {
+    "scenario": "uniform",
+    "concurrency": 64,
+    "duration_s": 10,
+    "requests": 3880,
+    "throughput_rps": 388.0,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 3880
+    },
+    "p50_ms": 93.76670999972703,
+    "p95_ms": 505.5580793503168,
+    "p99_ms": 789.4955171797528,
+    "max_ms": 1550.2297590001035,
+    "label": "2 workers x pool 20",
+    "workers": 2,
+    "pool_max": 20,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 0,
+    "evidence": {
+      "avg_backends_by_state": {
+        "idle (connection unused)": 34.83,
+        "idle in txn (waiting on app)": 4.19,
+        "active: WAL write/flush": 0.61,
+        "active: on CPU": 0.22,
+        "active: waiting on row/txn lock": 0.09,
+        "active: client I/O": 0.07
+      },
+      "avg_pool_requests_waiting": 0.21,
+      "api_cpu_pct": 109.8,
+      "postgres_cpu_pct": 64.6,
+      "machine_busy_pct": 86.8,
+      "cores": 4
+    }
+  },
+  {
+    "scenario": "uniform",
+    "concurrency": 64,
+    "duration_s": 10,
+    "requests": 3820,
+    "throughput_rps": 382.0,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 3820
+    },
+    "p50_ms": 97.90861900000891,
+    "p95_ms": 511.9161453999369,
+    "p99_ms": 750.4806185600318,
+    "max_ms": 1536.2012139999024,
+    "label": "3 workers x pool 20",
+    "workers": 3,
+    "pool_max": 20,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 0,
+    "evidence": {
+      "avg_backends_by_state": {
+        "idle (connection unused)": 55.32,
+        "idle in txn (waiting on app)": 3.74,
+        "active: WAL write/flush": 0.56,
+        "active: on CPU": 0.23,
+        "active: client I/O": 0.1,
+        "active: waiting on row/txn lock": 0.04,
+        "active: LWLock:BufferContent": 0.02
+      },
+      "avg_pool_requests_waiting": 0.13,
+      "api_cpu_pct": 112.3,
+      "postgres_cpu_pct": 64.6,
+      "machine_busy_pct": 87.0,
+      "cores": 4
+    }
+  }
+]

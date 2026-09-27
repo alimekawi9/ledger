@@ -178,24 +178,28 @@ that exact line. That's deterministic, unlike a `kill -9` from outside.
 
 | Scenario (best point) | Throughput | p50 | p95 | p99 |
 |---|---:|---:|---:|---:|
-| Uniform, 16 clients | **442 tx/s** | 35 ms | 52 ms | 67 ms |
-| Hot account, 4 clients | 309 tx/s | 12 ms | 22 ms | 31 ms |
+| Uniform, 16 clients | **452 tx/s** | 34 ms | 51 ms | 74 ms |
+| Hot source (all debit one account), 4 clients | 296 tx/s | 12 ms | 23 ms | 32 ms |
+| Hot destination (all credit one account), 16 clients | 296 tx/s | 31 ms | 175 ms | 272 ms |
 
 **Bottlenecks, identified by measurement rather than guessed**
 ([full analysis](docs/PERFORMANCE.md)):
 
 - **Uniform traffic → the API process's CPU.** The single worker ran at 95%
   of a core while Postgres connections sat mostly idle, waiting for the app.
-  I tested the tempting alternatives and ruled them out: a 3× larger
-  connection pool made no difference, and so did turning off the WAL fsync
-  wait at commit.
+  I tested the tempting alternatives and ruled them out: turning off the WAL
+  fsync wait at commit made no difference, and a 3× larger connection pool
+  swung between −4% and +13% across two rounds while the API stayed pinned
+  at ~95% CPU.
 - **Hot account → the row lock.** About 16 of 20 connections were waiting on
   the lock. I confirmed it causally: adding *s* ms inside the locked
   section lowered throughput along the predicted 1/(3.5 ms + s) curve,
-  within ~8%.
-- **The design's scaling limit:** computing the balance as `SUM(history)`
-  inside the lock. A hot account with 500k prior transfers drops to 15 tx/s.
-  Fix options and their trade-offs are in the performance doc.
+  within ~10%.
+- **Balance cost vs. history, fixed.** The first design summed the account's
+  history under the lock; a hot account with 500k prior transfers dropped to
+  15 tx/s. With a running balance stored on each entry, it holds at
+  279 tx/s. The trade-off, measured: payments *into* one account are now
+  serialized too.
 
 ![Diagnosis experiments](docs/load-diagnosis.png)
 
