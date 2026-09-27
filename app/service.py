@@ -148,13 +148,26 @@ async def get_account(pool: AsyncConnectionPool, account_id: uuid.UUID) -> dict:
 
 
 async def _customer_balance(conn: AsyncConnection, account_id: uuid.UUID) -> int:
-    """O(1): the newest entry's running balance (one backward index probe)."""
+    """O(1): the newest entry's running balance, one probe into
+    entries_account_id_idx. SQL is shared with the trigger in schema.sql.
+
+    Why not `WHERE account_id = $1 ORDER BY id DESC LIMIT 1`: for an account
+    holding a large share of all rows, the planner may walk the primary key
+    backwards expecting a match "soon", which becomes a full scan when that
+    account's entries sit at old ids (measured: 42 ms instead of 0.025 ms
+    with 500k entries). Asking for the last row at or before
+    (account_id, MAX) in (account_id, id) order can only be answered by the
+    composite index. If the row found belongs to another account, this one
+    has no entries yet.
+    """
     cur = await conn.execute(
-        "SELECT balance_after FROM entries WHERE account_id = %s ORDER BY id DESC LIMIT 1",
+        "SELECT account_id, balance_after FROM entries"
+        " WHERE (account_id, id) <= (%s, 9223372036854775807)"
+        " ORDER BY account_id DESC, id DESC LIMIT 1",
         (account_id,),
     )
     row = await cur.fetchone()
-    return row["balance_after"] if row else 0
+    return row["balance_after"] if row and row["account_id"] == account_id else 0
 
 
 async def _external_balance(conn: AsyncConnection, account_id: uuid.UUID) -> int:

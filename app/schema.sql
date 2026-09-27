@@ -114,6 +114,7 @@ $$ LANGUAGE plpgsql;
 CREATE OR REPLACE FUNCTION ledger_set_balance_after() RETURNS trigger AS $$
 DECLARE
     acct_kind text;
+    prev_acct uuid;
     prev bigint;
 BEGIN
     IF current_setting('transaction_isolation') <> 'read committed' THEN
@@ -134,10 +135,15 @@ BEGIN
 
     NEW.id := nextval(pg_get_serial_sequence('entries', 'id'));
 
-    SELECT balance_after INTO prev FROM entries
-     WHERE account_id = NEW.account_id
-     ORDER BY id DESC LIMIT 1;
-    NEW.balance_after := COALESCE(prev, 0) + NEW.amount;
+    -- Newest entry of this account, phrased so only entries_account_id_idx
+    -- can answer it (see _customer_balance in service.py for why).
+    SELECT account_id, balance_after INTO prev_acct, prev FROM entries
+     WHERE (account_id, id) <= (NEW.account_id, 9223372036854775807)
+     ORDER BY account_id DESC, id DESC LIMIT 1;
+    IF prev_acct IS DISTINCT FROM NEW.account_id THEN
+        prev := 0;
+    END IF;
+    NEW.balance_after := prev + NEW.amount;
     IF NEW.balance_after < 0 THEN
         RAISE EXCEPTION 'account % would be overdrawn (balance %)',
             NEW.account_id, NEW.balance_after
