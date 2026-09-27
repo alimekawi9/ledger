@@ -1,0 +1,6 @@
+.git
+.test-logs
+__pycache__
+loadtest
+docs
+tests

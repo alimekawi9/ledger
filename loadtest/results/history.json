@@ -1,0 +1,155 @@
+[
+  {
+    "scenario": "hot",
+    "concurrency": 32,
+    "duration_s": 10,
+    "requests": 2323,
+    "throughput_rps": 232.3,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 2323
+    },
+    "p50_ms": 96.6985200000181,
+    "p95_ms": 344.7840828999007,
+    "p99_ms": 531.2773057799325,
+    "max_ms": 975.5294729998241,
+    "label": "hot c=32, 0 prior transfers",
+    "workers": 1,
+    "pool_max": 20,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 0,
+    "evidence": {
+      "avg_backends_by_state": {
+        "active: waiting on row/txn lock": 16.25,
+        "active: LWLock:LockManager": 1.38,
+        "idle (connection unused)": 0.94,
+        "idle in txn (waiting on app)": 0.89,
+        "active: on CPU": 0.33,
+        "active: WAL write/flush": 0.1,
+        "active: client I/O": 0.07,
+        "active: LWLock:BufferContent": 0.04
+      },
+      "avg_pool_requests_waiting": 10.69,
+      "api_cpu_pct": 78.6,
+      "postgres_cpu_pct": 61.6,
+      "machine_busy_pct": 52.4,
+      "cores": 4
+    }
+  },
+  {
+    "scenario": "hot",
+    "concurrency": 32,
+    "duration_s": 10,
+    "requests": 1867,
+    "throughput_rps": 186.7,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 1867
+    },
+    "p50_ms": 116.51699399999416,
+    "p95_ms": 447.93612050004873,
+    "p99_ms": 628.8950929601149,
+    "max_ms": 1378.3867109998482,
+    "label": "hot c=32, 10,000 prior transfers",
+    "workers": 1,
+    "pool_max": 20,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 10000,
+    "evidence": {
+      "avg_backends_by_state": {
+        "active: waiting on row/txn lock": 16.43,
+        "active: LWLock:LockManager": 1.36,
+        "idle in txn (waiting on app)": 0.82,
+        "idle (connection unused)": 0.71,
+        "active: on CPU": 0.53,
+        "active: WAL write/flush": 0.08,
+        "active: client I/O": 0.03,
+        "active: LWLock:BufferContent": 0.03
+      },
+      "avg_pool_requests_waiting": 11.15,
+      "api_cpu_pct": 70.3,
+      "postgres_cpu_pct": 71.8,
+      "machine_busy_pct": 51.0,
+      "cores": 4
+    }
+  },
+  {
+    "scenario": "hot",
+    "concurrency": 32,
+    "duration_s": 10,
+    "requests": 814,
+    "throughput_rps": 81.4,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 814
+    },
+    "p50_ms": 274.34161500002574,
+    "p95_ms": 902.4777865998774,
+    "p99_ms": 1415.4931414400519,
+    "max_ms": 2155.5493849998584,
+    "label": "hot c=32, 100,000 prior transfers",
+    "workers": 1,
+    "pool_max": 20,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 100000,
+    "evidence": {
+      "avg_backends_by_state": {
+        "active: waiting on row/txn lock": 17.64,
+        "idle (connection unused)": 0.8,
+        "active: on CPU": 0.79,
+        "active: LWLock:LockManager": 0.43,
+        "idle in txn (waiting on app)": 0.26,
+        "active: WAL write/flush": 0.06,
+        "active: IPC:BgWorkerShutdown": 0.02,
+        "active: client I/O": 0.01
+      },
+      "avg_pool_requests_waiting": 11.18,
+      "api_cpu_pct": 30.6,
+      "postgres_cpu_pct": 84.7,
+      "machine_busy_pct": 41.3,
+      "cores": 4
+    }
+  },
+  {
+    "scenario": "hot",
+    "concurrency": 32,
+    "duration_s": 10,
+    "requests": 146,
+    "throughput_rps": 14.6,
+    "error_rate": 0.0,
+    "statuses": {
+      "201": 146
+    },
+    "p50_ms": 1385.5985454999882,
+    "p95_ms": 3959.640245999992,
+    "p99_ms": 4907.593909449965,
+    "max_ms": 6807.362937999869,
+    "label": "hot c=32, 500,000 prior transfers",
+    "workers": 1,
+    "pool_max": 20,
+    "pgoptions": "",
+    "failpoints": "",
+    "history": 500000,
+    "evidence": {
+      "avg_backends_by_state": {
+        "active: waiting on row/txn lock": 17.93,
+        "idle (connection unused)": 1.07,
+        "active: on CPU": 0.76,
+        "idle in txn (waiting on app)": 0.07,
+        "active: IPC:BgWorkerShutdown": 0.07,
+        "active: IO:DataFileRead": 0.06,
+        "active: WAL write/flush": 0.02,
+        "active: IPC:ExecuteGather": 0.01,
+        "active: IO:DataFileWrite": 0.01
+      },
+      "avg_pool_requests_waiting": 10.66,
+      "api_cpu_pct": 11.9,
+      "postgres_cpu_pct": 88.3,
+      "machine_busy_pct": 50.9,
+      "cores": 4
+    }
+  }
+]

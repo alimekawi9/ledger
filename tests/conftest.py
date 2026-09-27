@@ -182,9 +182,6 @@ def clean_ledger_and_check_invariants(request):
     the ledger (unbalanced transfer, stuck 'pending' row, overdraft) fails
     even if its own assertions missed it.
     """
-    if "no_db" in request.keywords:
-        yield
-        return
     with psycopg.connect(TEST_DB_URL, autocommit=True) as conn:
         _ensure_schema(conn)
         conn.execute("TRUNCATE entries, transfers, accounts")

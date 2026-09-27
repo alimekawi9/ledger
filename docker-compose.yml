@@ -1,0 +1,36 @@
+# One command:  docker compose up --build
+# API on http://localhost:8000 (docs at /docs, metrics at /metrics)
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: ledger
+      POSTGRES_PASSWORD: ledger
+      POSTGRES_DB: ledger
+    command: ["postgres", "-c", "max_connections=300"]
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ledger -d ledger"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-test-db.sql:/docker-entrypoint-initdb.d/init-test-db.sql:ro
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: postgresql://ledger:ledger@db:5432/ledger
+      DB_POOL_MAX_SIZE: "20"
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 2s
+      retries: 15
+
+volumes:
+  pgdata:
