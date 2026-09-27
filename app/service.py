@@ -6,11 +6,11 @@ The whole transfer is ONE database transaction:
       1. validate accounts exist / currencies match            (no locks)
       2. INSERT transfer row ... ON CONFLICT (idempotency_key) DO NOTHING
            -> if the key already exists: return the stored result (replay)
-      3. SELECT source account ... FOR NO KEY UPDATE           (row lock)
-      4. SELECT SUM(amount) FROM entries WHERE account = source
+      3. lock both customer accounts, in sorted id order        (row locks)
+      4. read the source's balance = newest entry's balance_after
            -> insufficient funds: mark transfer 'rejected', COMMIT
-      5. INSERT debit entry  (-amount, source)
-      6. INSERT credit entry (+amount, destination)
+      5. INSERT debit entry  (-amount, source)       } trigger computes
+      6. INSERT credit entry (+amount, destination)  } balance_after
       7. UPDATE transfer SET status = 'completed'
     COMMIT   <- deferred trigger verifies entries sum to zero
 
@@ -29,24 +29,34 @@ Why each step is where it is:
   commits.
 
 * READ COMMITTED, not REPEATABLE READ. Under READ COMMITTED every statement
-  takes a fresh snapshot, so the SUM in step 4 (run *after* we waited for
-  the lock) sees the entries the previous lock holder committed. Under
-  REPEATABLE READ the snapshot is fixed at the first statement, i.e. before
-  we waited, so the SUM would miss them and overdraw anyway.
-  tests/test_isolation_levels.py demonstrates this.
+  takes a fresh snapshot, so the balance read in step 4 (run *after* we
+  waited for the lock) sees the entries the previous lock holder committed.
+  Under REPEATABLE READ the snapshot is fixed at the first statement, i.e.
+  before we waited, so the read would be stale and overdraw anyway.
+  tests/test_isolation_levels.py demonstrates this; the balance_after
+  trigger refuses to run under any other level.
 
 * FOR NO KEY UPDATE, not FOR UPDATE. Inserting a transfer/entry row takes a
   FOR KEY SHARE lock on the referenced account (foreign key check). FOR
   UPDATE conflicts with KEY SHARE, which deadlocks two concurrent transfers
   from the same account. NO KEY UPDATE does not conflict with KEY SHARE.
 
-* Only the *source* account is locked. The only invariant at risk is
-  "customer balance never negative", and only a debit can break it. Locking
-  one row per transaction also makes deadlocks between transfers impossible
-  (a cycle needs two locks), which tests/test_concurrency.py checks with
-  opposite-direction A<->B traffic. The external (funding) account may go
-  negative, so it is not locked at all; otherwise every deposit would
-  serialize on that single row.
+* Both customer accounts are locked, because each entry stores the
+  account's running balance (balance_after), and a running balance is only
+  correct if that account's writers take turns. (An earlier version locked
+  only the source and computed balances as SUM(history): no deadlock risk,
+  but reads got slower as history grew. See docs/PERFORMANCE.md.)
+
+* Sorted lock order. Two locks per transaction bring back the textbook
+  deadlock: A->B locks A then wants B while B->A locks B then wants A.
+  Taking locks in one global order (ascending account id) makes a cycle
+  impossible: whoever holds the lower id never waits on someone holding
+  a higher one who in turn waits for it. tests/test_concurrency.py checks
+  this with opposite-direction A<->B traffic.
+
+* External (funding) accounts are never locked. They may go negative, so
+  they have nothing to protect, and every deposit touches one: locking it
+  would serialize all deposits of a currency on a single row.
 """
 
 import hashlib
@@ -137,7 +147,18 @@ async def get_account(pool: AsyncConnectionPool, account_id: uuid.UUID) -> dict:
     return row
 
 
-async def _balance(conn: AsyncConnection, account_id: uuid.UUID) -> int:
+async def _customer_balance(conn: AsyncConnection, account_id: uuid.UUID) -> int:
+    """O(1): the newest entry's running balance (one backward index probe)."""
+    cur = await conn.execute(
+        "SELECT balance_after FROM entries WHERE account_id = %s ORDER BY id DESC LIMIT 1",
+        (account_id,),
+    )
+    row = await cur.fetchone()
+    return row["balance_after"] if row else 0
+
+
+async def _external_balance(conn: AsyncConnection, account_id: uuid.UUID) -> int:
+    """External accounts keep no running balance (see schema.sql): sum history."""
     cur = await conn.execute(
         "SELECT COALESCE(SUM(amount), 0)::bigint AS balance FROM entries WHERE account_id = %s",
         (account_id,),
@@ -147,8 +168,9 @@ async def _balance(conn: AsyncConnection, account_id: uuid.UUID) -> int:
 
 async def get_balance(pool: AsyncConnectionPool, account_id: uuid.UUID) -> dict:
     account = await get_account(pool, account_id)
+    read = _customer_balance if account["kind"] == "customer" else _external_balance
     async with pool.connection() as conn:
-        balance = await _balance(conn, account_id)
+        balance = await read(conn, account_id)
     return {"account_id": account_id, "currency": account["currency"], "balance": balance}
 
 
@@ -159,7 +181,7 @@ async def get_history(
     async with pool.connection() as conn:
         cur = await conn.execute(
             """
-            SELECT e.id AS entry_id, e.transfer_id, e.amount,
+            SELECT e.id AS entry_id, e.transfer_id, e.amount, e.balance_after,
                    CASE WHEN e.amount < 0 THEN 'debit' ELSE 'credit' END AS direction,
                    CASE WHEN e.amount < 0 THEN t.to_account_id ELSE t.from_account_id END
                        AS counterparty_account_id,
@@ -226,13 +248,18 @@ async def create_transfer(
             if transfer is None:
                 return await _replay(conn, idempotency_key, fingerprint)
 
-            # 3 + 4. Lock the source, then read its balance.
-            if source["kind"] != "external":
+            # 3. Lock every customer account we will write, lowest id first.
+            #    One statement per lock, so the order is explicit rather than
+            #    depending on how the planner executes a multi-row lock.
+            for acct_id in sorted(a for a in (from_account_id, to_account_id)
+                                  if accounts[a]["kind"] == "customer"):
                 await conn.execute(
-                    "SELECT 1 FROM accounts WHERE id = %s FOR NO KEY UPDATE",
-                    (from_account_id,),
+                    "SELECT 1 FROM accounts WHERE id = %s FOR NO KEY UPDATE", (acct_id,)
                 )
-                balance = await _balance(conn, from_account_id)
+
+            # 4. Read the source's balance (after locking, so it is current).
+            if source["kind"] == "customer":
+                balance = await _customer_balance(conn, from_account_id)
                 await failpoint("after_balance_check")
                 if balance < amount:
                     transfer = await _finish(conn, transfer["id"], "rejected", "insufficient_funds")

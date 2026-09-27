@@ -9,6 +9,7 @@ client itself is less likely to be the bottleneck.
 Scenarios:
   uniform  random source/destination among many accounts (low contention)
   hot      every transfer debits ONE account (maximum lock contention)
+  hot_dest every transfer credits ONE account (a merchant being paid)
 """
 
 import argparse
@@ -41,6 +42,8 @@ async def _client_loop(client, accounts, scenario, deadline, warmup_until, rng, 
             return
         if scenario == "hot":
             src, dst = accounts[0], rng.choice(accounts[1:])
+        elif scenario == "hot_dest":
+            src, dst = rng.choice(accounts[1:]), accounts[0]
         else:
             src, dst = rng.sample(accounts, 2)
         start = time.perf_counter()
@@ -116,7 +119,7 @@ def run_load(base_url, accounts, scenario, concurrency, duration, warmup=2.0, pr
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--url", default="http://127.0.0.1:8000")
-    ap.add_argument("--scenario", choices=["uniform", "hot"], default="uniform")
+    ap.add_argument("--scenario", choices=["uniform", "hot", "hot_dest"], default="uniform")
     ap.add_argument("--concurrency", type=int, default=32)
     ap.add_argument("--duration", type=float, default=15)
     ap.add_argument("--accounts", type=int, default=200)

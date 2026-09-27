@@ -30,9 +30,9 @@ def test_transaction_history_shows_both_sides(api):
     alice_hist = api.http.get(f"/accounts/{alice}/transactions").json()
     bob_hist = api.http.get(f"/accounts/{bob}/transactions").json()
 
-    assert [(h["direction"], h["amount"], h["kind"]) for h in alice_hist] == [
-        ("debit", -400, "transfer"),
-        ("credit", 1_000, "deposit"),
+    assert [(h["direction"], h["amount"], h["balance_after"], h["kind"]) for h in alice_hist] == [
+        ("debit", -400, 600, "transfer"),
+        ("credit", 1_000, 1_000, "deposit"),
     ]
     assert bob_hist[0]["transfer_id"] == t["id"]
     assert bob_hist[0]["counterparty_account_id"] == alice

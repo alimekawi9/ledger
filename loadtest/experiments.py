@@ -231,7 +231,7 @@ def run_one(label: str, *, scenario: str, concurrency: int, workers: int = 1, po
 
 def sweep():
     out = []
-    for scenario in ("uniform", "hot"):
+    for scenario in ("uniform", "hot", "hot_dest"):
         for c in (1, 4, 16, 32, 64, 128):
             out.append(run_one(f"{scenario} c={c}", scenario=scenario, concurrency=c))
     (RESULTS / "sweep.json").write_text(json.dumps(out, indent=2))

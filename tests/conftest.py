@@ -188,8 +188,8 @@ def clean_ledger_and_check_invariants(request):
     yield
     with psycopg.connect(TEST_DB_URL, autocommit=True) as conn:
         if "corrupts_ledger" in request.keywords:
-            # Deliberately-broken control experiments leave an overdrawn
-            # ledger behind by design; wipe it instead of checking it.
+            # Raw-SQL control experiments bypass the ledger's triggers (and
+            # some overdraw by design); wipe instead of checking.
             conn.execute("TRUNCATE entries, transfers, accounts")
         else:
             assert_ledger_consistent(conn)
@@ -220,6 +220,21 @@ def assert_ledger_consistent(conn) -> None:
         """
     ).fetchall()
     assert not bad, f"malformed transfers: {bad}"
+
+    # Every customer entry's balance_after equals the running sum of that
+    # account's entries in id order: the stored chain matches the history.
+    broken_chain = conn.execute(
+        """
+        SELECT id, account_id, balance_after, running FROM (
+            SELECT e.id, e.account_id, e.balance_after,
+                   SUM(e.amount) OVER (PARTITION BY e.account_id ORDER BY e.id) AS running
+              FROM entries e JOIN accounts a ON a.id = e.account_id
+             WHERE a.kind = 'customer') x
+         WHERE balance_after IS DISTINCT FROM running
+         LIMIT 5
+        """
+    ).fetchall()
+    assert not broken_chain, f"balance_after disagrees with history: {broken_chain}"
 
     negative = conn.execute(
         """

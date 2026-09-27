@@ -102,6 +102,7 @@ class HistoryEntry(BaseModel):
     entry_id: int
     transfer_id: uuid.UUID
     amount: int
+    balance_after: int | None = Field(description="Running balance after this entry (customer accounts).")
     direction: Literal["debit", "credit"]
     counterparty_account_id: uuid.UUID
     kind: str

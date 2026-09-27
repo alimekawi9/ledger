@@ -13,8 +13,13 @@ RESULTS = ROOT / "loadtest" / "results"
 DOCS = ROOT / "docs"
 
 SURFACE, INK, INK_2, GRID = "#fcfcfb", "#0b0b0b", "#52514e", "#e4e3df"
-BLUE, ORANGE = "#2a78d6", "#eb6834"  # validated categorical slots 1-2
-SCENARIO = {"uniform": ("Uniform (1,000 accounts)", BLUE), "hot": ("Hot account", ORANGE)}
+BLUE, ORANGE, AQUA = "#2a78d6", "#eb6834", "#1baf7a"  # validated categorical slots 1-3
+REFERENCE = "#a3a29c"  # muted ink for the "before" comparison line
+SCENARIO = {
+    "uniform": ("Uniform (1,000 accounts)", BLUE),
+    "hot": ("Hot source (all debit one account)", ORANGE),
+    "hot_dest": ("Hot destination (all credit one account)", AQUA),
+}
 
 
 def _style(ax, title, xlabel, ylabel):
@@ -39,14 +44,13 @@ def sweep_chart():
         a1.plot(xs, [r["throughput_rps"] for r in rs], "-o", color=color, lw=2, ms=5,
                 markeredgecolor=SURFACE, label=name)
         a2.plot(xs, [r["p99_ms"] for r in rs], "-o", color=color, lw=2, ms=5,
-                markeredgecolor=SURFACE, label=f"{name} p99")
-        a2.plot(xs, [r["p50_ms"] for r in rs], "--", color=color, lw=1.5, label=f"{name} p50")
+                markeredgecolor=SURFACE, label=name)
     for ax in (a1, a2):
         ax.set_xscale("log", base=2)
         ax.set_xticks([1, 4, 16, 32, 64, 128], ["1", "4", "16", "32", "64", "128"])
     _style(a1, "Throughput vs. concurrent clients", "concurrent clients", "transfers / second")
     a1.set_ylim(0, None)
-    _style(a2, "Latency: p99 (solid), p50 (dashed)",
+    _style(a2, "p99 latency vs. concurrent clients",
            "concurrent clients", "latency (ms, log scale)")
     a2.set_yscale("log")
     a2.legend(frameon=False, fontsize=8, labelcolor=INK_2)
@@ -77,15 +81,24 @@ def diagnosis_chart():
            "extra time spent while holding the account lock", "transfers / second")
     a1.legend(frameon=False, fontsize=8, labelcolor=INK_2)
 
+    before = json.loads((RESULTS / "v1_sum_balance" / "history.json").read_text())
     ns = [r["history"] for r in hist]
-    tp = [r["throughput_rps"] for r in hist]
-    a2.plot(range(len(ns)), tp, "-o", color=ORANGE, lw=2, ms=6, markeredgecolor=SURFACE)
-    for i, v in enumerate(tp):
-        a2.annotate(f"{v:.0f}/s", (i, v), xytext=(0, 8), textcoords="offset points",
-                    ha="center", fontsize=8, color=INK_2)
+    top = 0
+    for runs, label, color, lw in (
+        (before, "before: balance = SUM(history)", REFERENCE, 1.5),
+        (hist, "after: running balance on each entry", BLUE, 2.5),
+    ):
+        tp = [r["throughput_rps"] for r in runs]
+        top = max(top, *tp)
+        a2.plot(range(len(tp)), tp, "-o", color=color, lw=lw, ms=6,
+                markeredgecolor=SURFACE, label=label)
+        for i, v in enumerate(tp):
+            a2.annotate(f"{v:.0f}/s", (i, v), xytext=(0, 8), textcoords="offset points",
+                        ha="center", fontsize=8, color=INK_2)
     a2.set_xticks(range(len(ns)), [f"{n:,}" for n in ns])
-    a2.set_ylim(0, max(tp) * 1.2)
-    _style(a2, "Hot account: balance = SUM(history) degrades",
+    a2.set_ylim(0, top * 1.25)
+    a2.legend(frameon=False, fontsize=8, labelcolor=INK_2, loc="lower left")
+    _style(a2, "Hot account vs. length of its history",
            "prior transfers on the hot account", "transfers / second")
     fig.tight_layout()
     fig.savefig(DOCS / "load-diagnosis.png", dpi=150, facecolor=SURFACE)
